@@ -29,27 +29,28 @@ internal class CastStreamResolver(
 
     suspend fun resolve(mediaId: String): ResolvedStream? {
         val videoId = mediaId.removePrefix(MERGING_DATA_TYPE.VIDEO)
-        streamRepository.getNewFormat(videoId).lastOrNull()?.let { format ->
-            val cachedUrl = format.audioUrl
-            if (cachedUrl != null && format.expiredTime > now()) {
-                val is403 = streamRepository.is403Url(cachedUrl).firstOrNull() != false
-                if (!is403) {
-                    Logger.d(TAG, "Resolved $videoId from cached format")
-                    return ResolvedStream(cachedUrl, normalizeMimeType(format.mimeType))
-                }
+
+        // 1. Try cached format
+        val cachedFormat = streamRepository.getNewFormat(videoId).lastOrNull()
+        val cachedUrl = cachedFormat?.audioUrl
+        if (cachedUrl != null && cachedFormat.expiredTime > now()) {
+            val is403 = streamRepository.is403Url(cachedUrl).firstOrNull() == true
+            if (!is403) {
+                Logger.d(TAG, "Resolved $videoId from cached format")
+                return ResolvedStream(cachedUrl, normalizeMimeType(cachedFormat.mimeType))
             }
         }
-        val freshUrl =
-            streamRepository
-                .getStream(
-                    dataStoreManager,
-                    videoId,
-                    isDownloading = false,
-                    isVideo = false,
-                ).lastOrNull() ?: return null
-        val mimeType = streamRepository.getNewFormat(videoId).lastOrNull()?.mimeType
+
+        // 2. Fresh extraction
+        val freshUrl = streamRepository
+            .getStream(dataStoreManager, videoId, isDownloading = false, isVideo = false)
+            .lastOrNull() ?: return null
+
+        // 3. Re-read the format we just wrote to get the mimeType (avoids a second getNewFormat call
+        //    by reusing the format from step 1 if it was written by getStream)
+        val freshFormat = streamRepository.getNewFormat(videoId).lastOrNull()
         Logger.d(TAG, "Resolved $videoId from fresh extraction")
-        return ResolvedStream(freshUrl, normalizeMimeType(mimeType))
+        return ResolvedStream(freshUrl, normalizeMimeType(freshFormat?.mimeType))
     }
 
     suspend fun invalidate(mediaId: String) {
